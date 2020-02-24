@@ -35,6 +35,11 @@ model = DenseUNet(
     activation_func=None,
     efficient=False,
 )
+
+# Initializes all the convolutional kernel weights.
+model.initialize_kernels(nn.init.kaiming_uniform_, conv=True)
+# Shows some information about the model.
+model.summary()
 ```
 
 This example tiramisu network has a depth of len(down_blocks) = 5.
