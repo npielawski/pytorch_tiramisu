@@ -4,6 +4,7 @@ import logging
 # Other libraries
 from abc import ABC
 
+import torch
 import torch.nn as nn
 
 
@@ -57,7 +58,7 @@ class BaseModel(nn.Module, ABC):
 
     def save(self, filename):
         """Saves the model"""
-        torch.save({"state_dict": self.state_dict()}, path)
+        torch.save({"state_dict": self.state_dict()}, filename)
 
     def half(self):
         """ Transforms all the weights of the model in half precision.
