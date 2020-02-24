@@ -1,3 +1,5 @@
+[![Python 3.6](https://img.shields.io/badge/python-3.6-blue.svg)](https://www.python.org/downloads/release/python-360/) [![DOI](https://zenodo.org/badge/242668685.svg)](https://zenodo.org/badge/latestdoi/242668685)
+
 # 🔥 Better Tiramisu for PyTorch 🔥
 
 Implementation of the Tiramisu Neural network for PyTorch with new features such
@@ -11,6 +13,7 @@ as:
 
 ## Getting Started
 
+You can try the model in Python with:
 ```py
 model = DenseUNet(
     in_channels=3,
@@ -73,6 +76,21 @@ The parameters of the constructor are explained as following:
 * efficient (bool): Memory efficient version of the Tiramisu.
     See: https://arxiv.org/pdf/1707.06990.pdf
 
+
+## Tips and tricks
+
+* Make sure the features you are interested in fit approximately the perceptive field.
+For instance, if you have an object that measures 50 pixels, you need at approx. 6
+levels of resolution in down/up blocks. Or use early transition, which down samples
+the input by two.
+* If you need to reduce the memory footprint, trying out the efficient version,
+enabling the early transition is a great way to start. Then, using compression,
+reducing the growth rate and finally the number of dense blocks in the down/up blocks.
+* Use upsampling instead of deconvolution, seriously. Deconvolutions are hard to
+manage and create a lot of gridding artefacts.
+* Use blurpooling if you want the neural network to be shift-invariant (good accuracy
+even when shifting the input).
+
 ## Built With
 
 * [Pytorch](https://pytorch.org/) - Version 1.4.0 (for memory efficient version)
@@ -91,3 +109,10 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 ## Acknowledgments
 
 Acknowledging and citing is appreciated and encouraged.
+
+Zenodo record: https://zenodo.org/record/3685491
+
+Cite as:
+```
+Nicolas Pielawski. (2020, February 24). npielawski/pytorch_tiramisu: Better Tiramisu 1.0 (Version 1.0). Zenodo. http://doi.org/10.5281/zenodo.3685491
+```
