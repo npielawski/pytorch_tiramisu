@@ -27,7 +27,7 @@ model = DenseUNet(
     growth_rate=12,
     compression=1.0,
     dropout_rate=0.2,
-    upsampling_type="deconv",
+    upsampling_type="upsample",
     early_transition=False,
     transition_pooling="max",
     batch_norm="batchnorm",
@@ -59,7 +59,7 @@ The parameters of the constructor are explained as following:
     by a factor between 0 and 1. (1.0 does not change the original arch.)
 * dropout_rate: The dropout rate to use.
 * upsampling_type: The type of upsampling to use in the TransitionUp layers.
-    available options: ["deconv" (default), "upsample", "pixelshuffle"]
+    available options: ["upsample" (default), "deconv", "pixelshuffle"]
     For Pixel shuffle see: https://arxiv.org/abs/1609.05158
 * early_transition: Optimization where the input is downscaled by a factor
     of two after the first layer. You can thus reduce the numbers of down
