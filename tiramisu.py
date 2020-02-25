@@ -268,11 +268,17 @@ class DenseUNet(BaseModel):
             efficient (bool): Memory efficient version of the Tiramisu.
                 See: https://arxiv.org/pdf/1707.06990.pdf
         """
-        super(DenseUNet, self).__init__(in_channels, nb_classes, activation_func)
-        self.early_transition = early_transition
+        super().__init__(in_channels, nb_classes, activation_func)
+        self.nb_classes = nb_classes
+        self.init_conv_filters = init_conv_filters
         self.down_blocks = down_blocks
+        self.bottleneck_layers = bottleneck_layers
         self.up_blocks = up_blocks
-        self.include_top = True
+        self.growth_rate = growth_rate
+        self.compression = compression
+        self.early_transition = early_transition
+        self.include_top = include_top
+
         channels_count = init_conv_filters
         skip_connections = []
 
@@ -463,3 +469,39 @@ class DenseUNet(BaseModel):
                 return y_pred
         else:
             return x
+
+    def get_channels_count(self):
+        """Counts the number of out channels for each DenseBlocks and transitions."""
+        channels_count = [self.init_conv_filters]
+        skip_connections = []
+
+        if self.early_transition:
+            channels_count.append(int(channels_count[-1] * self.compression))
+
+        # Downsampling part
+        for block_size in self.down_blocks:
+            channels_count.append(channels_count[-1] + self.growth_rate * block_size)
+            skip_connections.insert(0, channels_count[-1])
+            channels_count.append(int(channels_count[-1] * self.compression))
+
+        # Bottleneck
+        prev_block_channels = self.growth_rate * self.bottleneck_layers
+        channels_count.append(channels_count[-1] + prev_block_channels)
+
+        # Upsampling part
+        for i, block_size in enumerate(self.up_blocks[:-1]):
+            channels_count.append(prev_block_channels + skip_connections[i])
+            prev_block_channels = self.growth_rate * block_size
+            channels_count.append(channels_count[-1] + prev_block_channels)
+
+        channels_count.append(prev_block_channels + skip_connections[-1])
+        channels_count.append(channels_count[-1] + self.growth_rate * self.up_blocks[-1])
+
+        if self.early_transition:
+            channels_count.append(channels_count[-1] + self.init_conv_filters)
+
+        if self.include_top:
+            channels_count.append(self.nb_classes)
+
+        return channels_count
+
