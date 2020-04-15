@@ -6,7 +6,7 @@ setup(
     description="Pytorch Tiramisu Neural Network",
     author="Nicolas Pielawski",
     author_email="nicolas@pielawski.fr",
-    packages=["models"],
+    packages=["models", "models.layers"],
     install_requires=[
         "torch",
     ],
