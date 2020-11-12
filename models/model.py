@@ -10,23 +10,13 @@ import torch.nn as nn
 
 class BaseModel(nn.Module, ABC):
     def __init__(
-        self,
-        in_channels=3,
-        nb_classes=1,
-        activation_func=None,
-        activation_kwargs=None,
-        epistemic=None,
-        ensemble_size=1,
-        aleatoric=None,
+        self, in_channels=3, nb_classes=1, activation_func=None, activation_kwargs=None
     ):
         super().__init__()
         self.in_channels = in_channels
         self.nb_classes = nb_classes
         self.activation_func = activation_func
         self.activation_kwargs = activation_kwargs if activation_kwargs else {}
-        self.epistemic = epistemic
-        self.ensemble_size = ensemble_size
-        self.aleatoric = aleatoric
 
     def __str__(self):
         return type(self).__qualname__
@@ -58,7 +48,7 @@ class BaseModel(nn.Module, ABC):
 
     def save(self, filename):
         """Saves the model"""
-        torch.save({"state_dict": self.state_dict()}, filename)
+        torch.save(self, filename)
 
     def half(self):
         """ Transforms all the weights of the model in half precision.
