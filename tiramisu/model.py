@@ -31,7 +31,7 @@ class BaseModel(nn.Module, ABC):
     def summary(self, half=False, printer=print):
         """ Logs some information about the neural network.
         Args:
-            printf: The printing function to use.
+            printer: The printing function to use.
         """
         layers_count = len(list(self.modules()))
         printer(f"Model {self} has {layers_count} layers.")
