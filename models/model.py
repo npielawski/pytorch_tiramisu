@@ -1,6 +1,3 @@
-# Python Standard Library imports
-import logging
-
 # Other libraries
 from abc import ABC
 
@@ -31,20 +28,20 @@ class BaseModel(nn.Module, ABC):
                 param_count_nogrd += param.size().numel()
         return param_count_grd, param_count_nogrd
 
-    def summary(self, half=False, printf=print):
+    def summary(self, half=False, printer=print):
         """ Logs some information about the neural network.
         Args:
             printf: The printing function to use.
         """
         layers_count = len(list(self.modules()))
-        print(f"Model {self} has {layers_count} layers.")
+        printer(f"Model {self} has {layers_count} layers.")
         param_grd, param_nogrd = self.get_param_count()
         param_total = param_grd + param_nogrd
-        print(f"-> Total number of parameters: {param_total:n}")
-        print(f"-> Trainable parameters:       {param_grd:n}")
-        print(f"-> Non-trainable parameters:   {param_nogrd:n}")
+        printer(f"-> Total number of parameters: {param_total:n}")
+        printer(f"-> Trainable parameters:       {param_grd:n}")
+        printer(f"-> Non-trainable parameters:   {param_nogrd:n}")
         approx_size = param_total * (2.0 if half else 4.0) * 10e-7
-        print(f"Uncompressed size of the weights: {approx_size:.1f}MB")
+        printer(f"Uncompressed size of the weights: {approx_size:.1f}MB")
 
     def save(self, filename):
         """Saves the model"""
@@ -74,12 +71,15 @@ class BaseModel(nn.Module, ABC):
             **kwargs: Extra arguments to pass to the initializer function.
         """
         for layer in self.modules():
-            if (
-                (linear and isinstance(layer, nn.Linear))
-                or (conv and isinstance(layer, nn.Conv2d))
-                or (batchnorm and isinstance(layer, (nn.BatchNorm2d, nn.GroupNorm)))
-            ):
+            if linear and isinstance(layer, nn.Linear):
                 initializer(layer.weight, **kwargs)
+                continue
+            if conv and isinstance(layer, nn.Conv2d):
+                initializer(layer.weight, **kwargs)
+                continue
+            if batchnorm and isinstance(layer, (nn.BatchNorm2d, nn.GroupNorm)):
+                initializer(layer.weight, **kwargs)
+                continue
 
     def initialize_biases(
         self, initializer, conv=False, linear=False, batchnorm=False, **kwargs

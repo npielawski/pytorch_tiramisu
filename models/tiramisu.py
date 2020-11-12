@@ -1,7 +1,4 @@
-# Python Standard Library imports
-import types
-
-# Other imports
+# Deep Learning imports
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -89,8 +86,8 @@ class DenseBlock(nn.Module):
         )
         self.upsample = upsample
 
-    def forward(self, x):
-        skip_connections = [x]
+    def forward(self, input):
+        skip_connections = [input]
 
         for layer in self.layers:
             out = layer(skip_connections)
@@ -183,8 +180,8 @@ class TransitionUp(nn.Module):
                 nn.ReLU(inplace=True),
             )
 
-    def forward(self, x, skip):
-        out = self.upsampling_layer(x)
+    def forward(self, input, skip):
+        out = self.upsampling_layer(input)
         out = center_crop(out, skip.size(2), skip.size(3))
         out = torch.cat([skip, out], 1)
         return out
@@ -436,8 +433,8 @@ class DenseUNet(BaseModel):
             )
             self.final_activation = self.activation_func
 
-    def forward(self, x):
-        x = self.conv_init(x)
+    def forward(self, input):
+        x = self.conv_init(input)
 
         transition_skip = None
         if self.early_transition:
@@ -495,7 +492,9 @@ class DenseUNet(BaseModel):
             channels_count.append(channels_count[-1] + prev_block_channels)
 
         channels_count.append(prev_block_channels + skip_connections[-1])
-        channels_count.append(channels_count[-1] + self.growth_rate * self.up_blocks[-1])
+        channels_count.append(
+            channels_count[-1] + self.growth_rate * self.up_blocks[-1]
+        )
 
         if self.early_transition:
             channels_count.append(channels_count[-1] + self.init_conv_filters)
@@ -504,4 +503,3 @@ class DenseUNet(BaseModel):
             channels_count.append(self.nb_classes)
 
         return channels_count
-
