@@ -13,11 +13,9 @@ as:
 
 ## Getting Started
 
-The package can be installed by cloning the repo, then typing:
+The package can be installed from the repository with:
 ```console
-$ git clone https://github.com/npielawski/pytorch_tiramisu
-$ cd pytorch_tiramisu
-$ python3 setup.py install
+$ pip3 install git+https://github.com/npielawski/pytorch_tiramisu
 ```
 
 You can try the model in Python with:
