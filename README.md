@@ -13,8 +13,17 @@ as:
 
 ## Getting Started
 
+The package can be installed by cloning the repo, then typing:
+```console
+$ git clone https://github.com/npielawski/pytorch_tiramisu
+$ cd pytorch_tiramisu
+$ python3 setup.py install
+```
+
 You can try the model in Python with:
 ```py
+from tiramisu import DenseUNet
+
 model = DenseUNet(
     in_channels=3,
     nb_classes=1,
