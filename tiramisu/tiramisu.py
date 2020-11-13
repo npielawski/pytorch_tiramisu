@@ -45,8 +45,7 @@ class DenseLayer(nn.Module):
         )
 
     def any_requires_grad(self, x):
-        """Returns True if any of the layers in x requires gradients.
-        """
+        """Returns True if any of the layers in x requires gradients."""
         return any(layer.requires_grad for layer in x)
 
     def forward(self, x):
@@ -60,7 +59,7 @@ class DenseLayer(nn.Module):
         return x
 
 
-class DenseBlock(nn.Module):
+class DenseBlock(nn.ModuleDict):
     def __init__(
         self,
         in_channels,
@@ -70,26 +69,27 @@ class DenseBlock(nn.Module):
         batch_norm=True,
         dropout=0.2,
         efficient=False,
+        prefix="",
     ):
         super(DenseBlock, self).__init__()
-        self.layers = nn.ModuleList(
-            [
+        for i in range(nb_layers):
+            self.add_module(
+                f"{prefix}dense_layer_{i+1}",
                 DenseLayer(
                     in_channels + i * growth_rate,
                     growth_rate,
                     batch_norm,
                     dropout,
                     efficient,
-                )
-                for i in range(nb_layers)
-            ]
-        )
+                ),
+            )
+
         self.upsample = upsample
 
     def forward(self, input):
         skip_connections = [input]
 
-        for layer in self.layers:
+        for name, layer in self.items():
             out = layer(skip_connections)
             skip_connections.append(out)
 
@@ -228,7 +228,7 @@ class DenseUNet(BaseModel):
         activation_func=None,
         efficient=False,
     ):
-        """ Creates a Tiramisu/Fully Convolutional DenseNet Neural Network for
+        """Creates a Tiramisu/Fully Convolutional DenseNet Neural Network for
         image segmentation.
 
         Args:
@@ -294,36 +294,31 @@ class DenseUNet(BaseModel):
 
         # First layer
         init_conv_padding = (init_conv_size - 1) >> 1
-        self.add_module(
-            "conv_init",
-            nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=init_conv_filters,
-                kernel_size=init_conv_size,
-                stride=init_conv_stride,
-                padding=init_conv_padding,
-                bias=True,
-            ),
+        self.conv_init = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=init_conv_filters,
+            kernel_size=init_conv_size,
+            stride=init_conv_stride,
+            padding=init_conv_padding,
+            bias=True,
         )
 
         if early_transition:
-            self.add_module(
-                "early_transition_down",
-                TransitionDown(
-                    in_channels=channels_count,
-                    out_channels=int(channels_count * compression),
-                    batch_norm=batch_norm,
-                    dropout=dropout_rate,
-                    pooling=transition_pooling,
-                ),
+            self.early_transition_down = TransitionDown(
+                in_channels=channels_count,
+                out_channels=int(channels_count * compression),
+                batch_norm=batch_norm,
+                dropout=dropout_rate,
+                pooling=transition_pooling,
             )
             channels_count = int(channels_count * compression)
 
         # Downsampling part
-        self.layers_down = nn.ModuleList([])
-        self.transitions_down = nn.ModuleList([])
-        for block_size in self.down_blocks:
-            self.layers_down.append(
+        self.layers_down = nn.ModuleDict()
+        self.transitions_down = nn.ModuleDict()
+        for i, block_size in enumerate(self.down_blocks):
+            self.layers_down.add_module(
+                f"layers_down_{i}",
                 DenseBlock(
                     in_channels=channels_count,
                     growth_rate=growth_rate,
@@ -332,50 +327,52 @@ class DenseUNet(BaseModel):
                     batch_norm=batch_norm,
                     dropout=dropout_rate,
                     efficient=efficient,
-                )
+                    prefix="layers_down_{i}_",
+                ),
             )
             channels_count += growth_rate * block_size
             skip_connections.insert(0, channels_count)
-            self.transitions_down.append(
+            self.transitions_down.add_module(
+                f"transition_down_{i}",
                 TransitionDown(
                     in_channels=channels_count,
                     out_channels=int(channels_count * compression),
                     batch_norm=batch_norm,
                     dropout=dropout_rate,
                     pooling=transition_pooling,
-                )
+                ),
             )
             channels_count = int(channels_count * compression)
 
         # Bottleneck
-        self.add_module(
-            "bottleneck",
-            DenseBlock(
-                in_channels=channels_count,
-                growth_rate=growth_rate,
-                nb_layers=bottleneck_layers,
-                upsample=True,
-                batch_norm=batch_norm,
-                dropout=dropout_rate,
-                efficient=efficient,
-            ),
+        self.bottleneck = DenseBlock(
+            in_channels=channels_count,
+            growth_rate=growth_rate,
+            nb_layers=bottleneck_layers,
+            upsample=True,
+            batch_norm=batch_norm,
+            dropout=dropout_rate,
+            efficient=efficient,
+            prefix="bottelneck_",
         )
         prev_block_channels = growth_rate * bottleneck_layers
         channels_count += prev_block_channels
 
         # Upsampling part
-        self.layers_up = nn.ModuleList([])
-        self.transitions_up = nn.ModuleList([])
+        self.transitions_up = nn.ModuleDict()
+        self.layers_up = nn.ModuleDict()
         for i, block_size in enumerate(self.up_blocks[:-1]):
-            self.transitions_up.append(
+            self.transitions_up.add_module(
+                f"transition_up_{i}",
                 TransitionUp(
                     in_channels=prev_block_channels,
                     out_channels=prev_block_channels,
                     upsampling_type=upsampling_type,
-                )
+                ),
             )
             channels_count = prev_block_channels + skip_connections[i]
-            self.layers_up.append(
+            self.layers_up.add_module(
+                f"layers_up_{i}",
                 DenseBlock(
                     in_channels=channels_count,
                     growth_rate=growth_rate,
@@ -384,20 +381,23 @@ class DenseUNet(BaseModel):
                     batch_norm=batch_norm,
                     dropout=dropout_rate,
                     efficient=efficient,
-                )
+                    prefix="layers_up_{i}_",
+                ),
             )
             prev_block_channels = growth_rate * block_size
             channels_count += prev_block_channels
 
-        self.transitions_up.append(
+        self.transitions_up.add_module(
+            "transition_up_last",
             TransitionUp(
                 in_channels=prev_block_channels,
                 out_channels=prev_block_channels,
                 upsampling_type=upsampling_type,
-            )
+            ),
         )
         channels_count = prev_block_channels + skip_connections[-1]
-        self.layers_up.append(
+        self.layers_up.add_module(
+            f"layers_up_last",
             DenseBlock(
                 in_channels=channels_count,
                 growth_rate=growth_rate,
@@ -406,18 +406,16 @@ class DenseUNet(BaseModel):
                 batch_norm=batch_norm,
                 dropout=dropout_rate,
                 efficient=efficient,
-            )
+                prefix="layers_up_last_",
+            ),
         )
         channels_count += growth_rate * up_blocks[-1]
 
         if early_transition:
-            self.add_module(
-                "early_transition_up",
-                TransitionUp(
-                    in_channels=channels_count,
-                    out_channels=channels_count,
-                    upsampling_type=upsampling_type,
-                ),
+            self.early_transition_up = TransitionUp(
+                in_channels=channels_count,
+                out_channels=channels_count,
+                upsampling_type=upsampling_type,
             )
             channels_count += init_conv_filters
 
@@ -442,17 +440,21 @@ class DenseUNet(BaseModel):
             x = self.early_transition_down(x)
 
         skip_connections = []
-        for i in range(len(self.down_blocks)):
-            x = self.layers_down[i](x)
+        for layer_down, transition_down in zip(
+            self.layers_down.values(), self.transitions_down.values()
+        ):
+            x = layer_down(x)
             skip_connections.append(x)
-            x = self.transitions_down[i](x)
+            x = transition_down(x)
 
         x = self.bottleneck(x)
 
-        for i in range(len(self.up_blocks)):
+        for transition_up, layer_up in zip(
+            self.transitions_up.values(), self.layers_up.values()
+        ):
             skip = skip_connections.pop()
-            x = self.transitions_up[i](x, skip)
-            x = self.layers_up[i](x)
+            x = transition_up(x, skip)
+            x = layer_up(x)
 
         if self.early_transition:
             x = self.early_transition_up(x, skip=transition_skip)
