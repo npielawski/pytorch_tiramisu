@@ -80,7 +80,6 @@ The parameters of the constructor are explained as following:
     available options: ["max" (default), "avg", "blurpool"]
 * batch_norm: Type of batch normalization to use.
     available options: ["batchnorm" (default), None]
-    For FRN see: https://arxiv.org/pdf/1911.09737v1.pdf
 * include_top (bool): Including the top layer, with the last convolution
     and softmax/sigmoid (True) or returns the embeddings for each pixel
     of the input image (False).
