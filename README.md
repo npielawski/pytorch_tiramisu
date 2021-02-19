@@ -10,6 +10,7 @@ as:
 * The depth and width of the Tiramisu is fully configurable.
 * Early-transition can be enabled when the input images are big.
 * The activation function of the last layer can be disabled or modified.
+* 🎉 Won a competition (Adipocyte Cell Imaging Challenge)! [Preprint of the winners is here](https://www.biorxiv.org/content/10.1101/2021.01.18.427121v3).
 
 ## Getting Started
 
