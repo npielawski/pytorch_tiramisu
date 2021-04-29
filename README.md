@@ -5,11 +5,12 @@
 Implementation of the Tiramisu Neural network for PyTorch with new features such
 as:
 * Memory-efficient version (trade-off between memory and speed).
-* Different types of upsampling (deconvolution, upsampling and pixel shuffle).
+* Different types of upsampling (transposed convolution, upsampling and pixel shuffle).
 * Different types of pooling (max-pooling, avg-pooling, blur-pooling).
 * The depth and width of the Tiramisu is fully configurable.
 * Early-transition can be enabled when the input images are big.
 * The activation function of the last layer can be disabled or modified.
+
 
 ## Getting Started
 
@@ -71,7 +72,7 @@ The parameters of the constructor are explained as following:
     by a factor between 0 and 1. (1.0 does not change the original arch.)
 * dropout_rate: The dropout rate to use.
 * upsampling_type: The type of upsampling to use in the TransitionUp layers.
-    available options: ["upsample" (default), "deconv", "pixelshuffle"]
+    available options: ["upsample" (default), "transpose", "pixelshuffle"]
     For Pixel shuffle see: https://arxiv.org/abs/1609.05158
 * early_transition: Optimization where the input is downscaled by a factor
     of two after the first layer. You can thus reduce the numbers of down
@@ -92,30 +93,32 @@ The parameters of the constructor are explained as following:
 
 * Make sure the features you are interested in fit approximately the perceptive field.
 For instance, if you have an object that measures 50 pixels, you need at approx. 6
-levels of resolution in down/up blocks. Or use early transition, which down samples
-the input by two.
+levels of resolution in down/up blocks (since 2^6=64 > 50). Or use early transition,
+which down samples the input by two.
 * If you need to reduce the memory footprint, trying out the efficient version,
 enabling the early transition is a great way to start. Then, using compression,
 reducing the growth rate and finally the number of dense blocks in the down/up blocks.
-* Use upsampling instead of deconvolution, seriously. Deconvolutions are hard to
-manage and create a lot of gridding artefacts.
+* Use upsampling instead of transposed convolution, seriously. Transposed convolutions
+are hard to manage and [may create a lot of gridding artefacts](https://distill.pub/2016/deconv-checkerboard/).
 * Use blurpooling if you want the neural network to be shift-invariant (good accuracy
 even when shifting the input).
 
+
 ## Built With
 
-* [Pytorch](https://pytorch.org/) - Version 1.4.0 (for memory efficient version)
+* [Pytorch](https://pytorch.org/) - Version >=1.4.0 (for memory efficient version)
 
 
-## Authors
-
-* **Nicolas Pielawski** - *Initial work*
+## Contributing
 
 See also the list of [contributors](https://github.com/npielawski/torch_tiramisu/contributors) who participated in this project.
+For contributing, make sure the code passes the checks of [Pylama](https://github.com/klen/pylama), [Bandit](https://github.com/PyCQA/bandit) and [Mypy](https://github.com/python/mypy).
+
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
+
 
 ## Acknowledgments
 

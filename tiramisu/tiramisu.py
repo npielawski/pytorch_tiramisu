@@ -1,3 +1,20 @@
+"""Implementation of the Tiramisu Deep Neural Network.
+
+The file contains the modules and main class to instantiate a Tiramisu model. The
+model isn't the same as in the original paper and has various improvements, such as
+checkpointing, different types of upsampling, etc.
+
+TODO:
+    * Add possibility to change each layer type and activation function.
+    * Reduce/refactor number of arguments for each function.
+    * Add unit-tests.
+    * Make the Neural Network work at any input size (currently only works with
+      powers of 2).
+"""
+from collections.abc import Callable
+from typing import List, Tuple
+from mypy_extensions import VarArg
+
 # Deep Learning imports
 import torch
 import torch.nn as nn
@@ -6,11 +23,17 @@ import torch.utils.checkpoint as cp
 
 # Local imports
 from .model import BaseModel
-from .layers.BlurPool2d import BlurPool2d
+from .layers.blurpool import BlurPool2d
 
 
-def _bn_function_factory(norm, relu, conv):
-    def bn_function(*inputs):
+def _bn_function_factory(
+    norm: nn.Module,
+    relu: nn.Module,
+    conv: nn.Module,
+) -> Callable[[VarArg(torch.Tensor)], torch.Tensor]:
+    """This function is necessary to implement checkpointing."""
+
+    def bn_function(*inputs: torch.Tensor) -> torch.Tensor:
         concated_features = torch.cat(inputs, 1)
         if norm is not None:
             concated_features = norm(concated_features)
@@ -21,13 +44,15 @@ def _bn_function_factory(norm, relu, conv):
 
 
 class DenseLayer(nn.Module):
+    """A complete BN-ReLU-Conv-DropOut layer."""
+
     def __init__(
         self,
-        in_channels,
-        growth_rate,
-        batch_norm="batchnorm",
-        dropout=0.2,
-        efficient=False,
+        in_channels: int,
+        growth_rate: int,
+        batch_norm: str = "batchnorm",
+        dropout: float = 0.2,
+        efficient: bool = False,
     ):
         super().__init__()
         self.dropout = dropout
@@ -44,12 +69,14 @@ class DenseLayer(nn.Module):
             ),
         )
 
-    def any_requires_grad(self, x):
+    @staticmethod
+    def any_requires_grad(x: torch.Tensor) -> bool:
         """Returns True if any of the layers in x requires gradients."""
         return any(layer.requires_grad for layer in x)
 
-    def forward(self, x):
-        bn_function = _bn_function_factory(self.batchnorm, self.relu, self.conv)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Computes the foward pass of the layer."""
+        bn_function = _bn_function_factory(self.batchnorm, self.relu, self.conv)  # type: ignore
         if self.efficient and self.any_requires_grad(x):
             x = cp.checkpoint(bn_function, *x)
         else:
@@ -60,16 +87,18 @@ class DenseLayer(nn.Module):
 
 
 class DenseBlock(nn.ModuleDict):
+    """Implementation of the denseblock of the Tiramisu, with all the skip connections."""
+
     def __init__(
         self,
-        in_channels,
-        growth_rate,
-        nb_layers,
-        upsample=False,
-        batch_norm=True,
-        dropout=0.2,
-        efficient=False,
-        prefix="",
+        in_channels: int,
+        growth_rate: int,
+        nb_layers: int,
+        upsample: bool = False,
+        batch_norm: str = "batchnorm",
+        dropout: float = 0.2,
+        efficient: bool = False,
+        prefix: str = "",
     ):
         super(DenseBlock, self).__init__()
         for i in range(nb_layers):
@@ -86,31 +115,34 @@ class DenseBlock(nn.ModuleDict):
 
         self.upsample = upsample
 
-    def forward(self, input):
-        skip_connections = [input]
+    def forward(self, inp: torch.Tensor) -> torch.Tensor:  # type: ignore # pylint: disable=arguments-differ
+        """Computes the forward pass of the denseblock."""
+        skip_connections = [inp]
 
-        for name, layer in self.items():
+        for _, layer in self.items():
             out = layer(skip_connections)
             skip_connections.append(out)
 
         if self.upsample:
-            # Returns all of the x's, except for the first x (input), concatenated
+            # Returns all of the x's, except for the first x (inp), concatenated
             # As we are not supposed to have skip connections over the full dense block.
             # See original tiramisu paper for more details
             return torch.cat(skip_connections[1:], 1)
-        else:
-            # Returns all of the x's concatenated
-            return torch.cat(skip_connections, 1)
+
+        # Returns all of the x's concatenated
+        return torch.cat(skip_connections, 1)
 
 
 class TransitionDown(nn.Sequential):
+    """A layer with a convolution and some operation that divides the resolution by 2."""
+
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        batch_norm="batchnorm",
-        dropout=0.2,
-        pooling="max",
+        in_channels: int,
+        out_channels: int,
+        batch_norm: str = "batchnorm",
+        dropout: float = 0.2,
+        pooling: str = "max",
     ):
         super().__init__()
         if batch_norm == "batchnorm":
@@ -136,12 +168,13 @@ class TransitionDown(nn.Sequential):
         elif pooling == "blurpool":
             self.add_module("blurpool", BlurPool2d(out_channels))
 
-    def forward(self, x):
-        return super().forward(x)
-
 
 class TransitionUp(nn.Module):
-    def __init__(self, in_channels, out_channels, upsampling_type="deconv"):
+    """Layer that increases the spatial resolution by a factor of 2."""
+
+    def __init__(
+        self, in_channels: int, out_channels: int, upsampling_type: str = "transpose"
+    ):
         super().__init__()
         if upsampling_type == "upsample":
             self.upsampling_layer = nn.Sequential(
@@ -167,7 +200,7 @@ class TransitionUp(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.PixelShuffle(2),
             )
-        else:  # Default: "deconv"
+        else:  # Default: "transpose"
             self.upsampling_layer = nn.Sequential(
                 nn.ConvTranspose2d(
                     in_channels=in_channels,
@@ -180,18 +213,19 @@ class TransitionUp(nn.Module):
                 nn.ReLU(inplace=True),
             )
 
-    def forward(self, input, skip):
-        out = self.upsampling_layer(input)
+    def forward(self, inp: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        """Computes the forward pass of the layer."""
+        out = self.upsampling_layer(inp)
         out = center_crop(out, skip.size(2), skip.size(3))
         out = torch.cat([skip, out], 1)
         return out
 
 
-def center_crop(layer, max_height, max_width):
+def center_crop(layer: torch.Tensor, max_height: int, max_width: int) -> torch.Tensor:
     """ Crops a given to a certain size by removing equal margins all around."""
-    _, _, h, w = layer.size()
-    xy1 = (w - max_width) // 2
-    xy2 = (h - max_height) // 2
+    _, _, height, width = layer.size()
+    xy1 = (width - max_width) // 2
+    xy2 = (height - max_height) // 2
     return layer[:, :, xy2 : (xy2 + max_height), xy1 : (xy1 + max_width)]
 
 
@@ -209,24 +243,24 @@ class DenseUNet(BaseModel):
 
     def __init__(
         self,
-        in_channels=3,
-        nb_classes=1,
-        init_conv_size=3,
-        init_conv_filters=48,
-        init_conv_stride=1,
-        down_blocks=(4, 4, 4, 4, 4),
-        bottleneck_layers=4,
-        up_blocks=(4, 4, 4, 4, 4),
-        growth_rate=12,
-        compression=1.0,
-        dropout_rate=0.2,
-        upsampling_type="upsample",
-        early_transition=False,
-        transition_pooling="max",
-        batch_norm="batchnorm",
-        include_top=True,
-        activation_func=None,
-        efficient=False,
+        in_channels: int = 3,
+        nb_classes: int = 1,
+        init_conv_size: int = 3,
+        init_conv_filters: int = 48,
+        init_conv_stride: int = 1,
+        down_blocks: Tuple[int, ...] = (4, 4, 4, 4, 4),
+        bottleneck_layers: int = 4,
+        up_blocks: Tuple[int, ...] = (4, 4, 4, 4, 4),
+        growth_rate: int = 12,
+        compression: float = 1.0,
+        dropout_rate: float = 0.2,
+        upsampling_type: str = "upsample",
+        early_transition: bool = False,
+        transition_pooling: str = "max",
+        batch_norm: str = "batchnorm",
+        include_top: bool = True,
+        activation_final: Callable[[torch.Tensor], torch.Tensor] = None,
+        efficient: bool = False,
     ):
         """Creates a Tiramisu/Fully Convolutional DenseNet Neural Network for
         image segmentation.
@@ -248,7 +282,7 @@ class DenseUNet(BaseModel):
                 by a factor between 0 and 1. (1.0 does not change the original arch.)
             dropout_rate: The dropout rate to use.
             upsampling_type: The type of upsampling to use in the TransitionUp layers.
-                available options: ["upsample" (default), "deconv", "pixelshuffle"]
+                available options: ["upsample" (default), "transpose", "pixelshuffle"]
                 For Pixel shuffle see: https://arxiv.org/abs/1609.05158
             early_transition: Optimization where the input is downscaled by a factor
                 of two after the first layer. You can thus reduce the numbers of down
@@ -260,11 +294,11 @@ class DenseUNet(BaseModel):
             include_top (bool): Including the top layer, with the last convolution
                 and softmax/sigmoid (True) or returns the embeddings for each pixel
                 of the input image (False).
-            activation_func (func): Activation function to use at the end of the model.
+            activation_final (func): Activation function to use at the end of the model.
             efficient (bool): Memory efficient version of the Tiramisu.
                 See: https://arxiv.org/pdf/1707.06990.pdf
         """
-        super().__init__(in_channels, nb_classes, activation_func)
+        super().__init__()
         self.nb_classes = nb_classes
         self.init_conv_filters = init_conv_filters
         self.down_blocks = down_blocks
@@ -274,22 +308,28 @@ class DenseUNet(BaseModel):
         self.compression = compression
         self.early_transition = early_transition
         self.include_top = include_top
+        self.activation_final = activation_final
 
         channels_count = init_conv_filters
-        skip_connections = []
+        # Keeps track of the number of channels for each skip-connection.
+        skip_connections: List[int] = []
 
         # Check
-        assert upsampling_type in [
-            "deconv",
-            "upsample",
-            "pixelshuffle",
-        ], "upsampling_type option does not exist."
-        assert transition_pooling in [
-            "max",
-            "avg",
-            "blurpool",
-        ], "transition_pooling option does not exist."
-        assert batch_norm in ["batchnorm", None], "batch_norm option does not exist."
+        upsampling_whitelist = ["upsample", "transpose", "pixelshuffle"]
+        assert upsampling_type in upsampling_whitelist, (
+            "upsampling_type option does not exist. Valid options are: "
+            f"{upsampling_whitelist}."
+        )
+        transition_pooling_whitelist = ["max", "avg", "blurpool"]
+        assert transition_pooling in transition_pooling_whitelist, (
+            "transition_pooling option does not exist. Valid options are: "
+            f"{transition_pooling_whitelist}."
+        )
+        batch_norm_whitelist = ["batchnorm", None]
+        assert batch_norm in batch_norm_whitelist, (
+            "batch_norm option does not exist. Valid options are: "
+            f"{batch_norm_whitelist}."
+        )
 
         # First layer
         init_conv_padding = (init_conv_size - 1) >> 1
@@ -352,7 +392,7 @@ class DenseUNet(BaseModel):
             batch_norm=batch_norm,
             dropout=dropout_rate,
             efficient=efficient,
-            prefix="bottelneck_",
+            prefix="bottleneck_",
         )
         prev_block_channels = growth_rate * bottleneck_layers
         channels_count += prev_block_channels
@@ -396,7 +436,7 @@ class DenseUNet(BaseModel):
         )
         channels_count = prev_block_channels + skip_connections[-1]
         self.layers_up.add_module(
-            f"layers_up_last",
+            "layers_up_last",
             DenseBlock(
                 in_channels=channels_count,
                 growth_rate=growth_rate,
@@ -428,10 +468,10 @@ class DenseUNet(BaseModel):
                 padding=0,
                 bias=True,
             )
-            self.final_activation = self.activation_func
 
-    def forward(self, input):
-        x = self.conv_init(input)
+    def forward(self, inp: torch.Tensor) -> torch.Tensor:
+        """Computes the forward pass of the Tiramisu network."""
+        x = self.conv_init(inp)
 
         transition_skip = None
         if self.early_transition:
@@ -461,17 +501,19 @@ class DenseUNet(BaseModel):
         if self.include_top:
             # Computation of the final 1x1 convolution
             y_pred = self.final_conv(x)
-            if self.final_activation:
-                return self.final_activation(y_pred)
-            else:
-                return y_pred
-        else:
-            return x
+            if self.activation_final:
+                return self.activation_final(y_pred)
+            return y_pred
 
-    def get_channels_count(self):
-        """Counts the number of out channels for each DenseBlocks and transitions."""
+        return x
+
+    def get_channels_count(self) -> List[int]:
+        """Counts the number of out channels for each DenseBlocks and transitions.
+
+        Returns: The list containing for each layers the number of (input) channels.
+        """
         channels_count = [self.init_conv_filters]
-        skip_connections = []
+        skip_connections: List[int] = []
 
         if self.early_transition:
             channels_count.append(int(channels_count[-1] * self.compression))

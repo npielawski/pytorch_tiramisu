@@ -1,3 +1,4 @@
+"""Installation script for easy pip install."""
 import setuptools
 
 with open("README.md", "r") as fh:
@@ -6,13 +7,13 @@ with open("README.md", "r") as fh:
 setuptools.setup(
     name="tiramisu",
     version="1.0",
-    description="Pytorch Tiramisu Neural Network",
+    description="Better Tiramisu Neural Network",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Nicolas Pielawski",
     author_email="nicolas@pielawski.fr",
     packages=setuptools.find_packages(),
-    install_requires=["torch"],
+    install_requires=["torch>=1.4", "mypy_extensions"],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
