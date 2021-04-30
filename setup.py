@@ -13,7 +13,7 @@ setuptools.setup(
     author="Nicolas Pielawski",
     author_email="nicolas@pielawski.fr",
     packages=setuptools.find_packages(),
-    install_requires=["torch>=1.4", "mypy_extensions"],
+    install_requires=["torch>=1.4"],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

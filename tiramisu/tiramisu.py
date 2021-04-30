@@ -5,32 +5,91 @@ model isn't the same as in the original paper and has various improvements, such
 checkpointing, different types of upsampling, etc.
 
 TODO:
-    * Add possibility to change each layer type and activation function.
-    * Reduce/refactor number of arguments for each function.
     * Add unit-tests.
     * Make the Neural Network work at any input size (currently only works with
       powers of 2).
+    * Add a default bank and make NN work with 3-D data.
 """
 from collections.abc import Callable
-from typing import List, Tuple
-from mypy_extensions import VarArg
+from enum import Enum, auto
+from functools import partial
+from typing import List, Mapping, Tuple
 
 # Deep Learning imports
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.utils.checkpoint as cp
 
 # Local imports
 from .model import BaseModel
-from .layers.blurpool import BlurPool2d
+
+
+class ModuleName(Enum):
+    """Module names that define which layers to use in the Tiramisu model."""
+
+    CONV = auto()  # Convolution operations
+    CONV_INIT = auto()  # Initial (1st) conv. operation. Kernel size must be provided.
+    CONV_FINAL = auto()  # Final convolution. 1x1 kernel and reduce output to C classes.
+    BATCHNORM = auto()  # Batch normalization (optional)
+    POOLING = auto()  # Pooling operation (must reduce input size by a factor of two)
+    # Note: if the size is odd, round *up* to the closest integer.
+    DROPOUT = auto()  # Dropout (optional)
+    UPSAMPLE = auto()  # Upsampling operation (must be by a factor of two)
+    ACTIVATION = auto()  # Activation function to use everywhere
+    ACTIVATION_FINAL = auto()  # Act. function at the last layer (e.g.softmax, optional)
+
+
+ModuleBankType = Mapping[ModuleName, Callable[..., nn.Module]]
+
+UPSAMPLE_NEAREST = lambda in_channels, out_channels: nn.Sequential(
+    nn.UpsamplingNearest2d(),
+    nn.Conv2d(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=3,
+        padding=1,
+    ),
+    nn.ReLU(inplace=True),
+)
+# Pixel shuffle see: https://arxiv.org/abs/1609.05158
+UPSAMPLE_PIXELSHUFFLE = lambda in_channels, out_channels: nn.Sequential(
+    nn.Conv2d(
+        in_channels=in_channels,
+        out_channels=4 * out_channels,
+        kernel_size=3,
+        padding=1,
+    ),
+    nn.ReLU(inplace=True),
+    nn.PixelShuffle(2),
+)
+UPSAMPLE_TRANPOSE = lambda in_channels, out_channels: nn.Sequential(
+    nn.ConvTranspose2d(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=3,
+        stride=2,
+        padding=0,
+    ),
+    nn.ReLU(inplace=True),
+)
+DEFAULT_MODULE_BANK: ModuleBankType = {
+    ModuleName.CONV: nn.Conv2d,
+    ModuleName.CONV_INIT: partial(nn.Conv2d, kernel_size=3, padding=1),
+    ModuleName.CONV_FINAL: nn.Conv2d,
+    ModuleName.BATCHNORM: nn.BatchNorm2d,
+    ModuleName.POOLING: nn.MaxPool2d,
+    ModuleName.DROPOUT: partial(nn.Dropout2d, p=0.2, inplace=True),
+    ModuleName.UPSAMPLE: UPSAMPLE_NEAREST,
+    ModuleName.ACTIVATION: partial(nn.ReLU, inplace=True),
+    ModuleName.ACTIVATION_FINAL: nn.Identity,
+}
 
 
 def _bn_function_factory(
     norm: nn.Module,
     relu: nn.Module,
     conv: nn.Module,
-) -> Callable[[VarArg(torch.Tensor)], torch.Tensor]:
+) -> Callable[..., torch.Tensor]:
     """This function is necessary to implement checkpointing."""
 
     def bn_function(*inputs: torch.Tensor) -> torch.Tensor:
@@ -49,25 +108,40 @@ class DenseLayer(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        growth_rate: int,
-        batch_norm: str = "batchnorm",
-        dropout: float = 0.2,
-        efficient: bool = False,
+        out_channels: int,
+        module_bank: ModuleBankType,
+        checkpoint: bool = False,
     ):
+        """A superlayer containing all the basic blocs together.
+
+        Performs a BatchNorm-ReLU-Conv-DropOut set of operation. Each individual part
+        can be replaced by modifying the bank entries. More details in DenseUNet class.
+
+        Args:
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            module_bank (ModuleBankType): The layers to use for common operations.
+            checkpoint (bool, optional): Memory checkpointing. Defaults to False.
+        """
         super().__init__()
-        self.dropout = dropout
-        self.efficient = efficient
-        self.has_bn = batch_norm is not None
+        self.checkpoint = checkpoint
         # Standard Tiramisu Layer (BN-ReLU-Conv-DropOut)
-        if batch_norm == "batchnorm":
-            self.add_module("batchnorm", nn.BatchNorm2d(in_channels))
-        self.add_module("relu", nn.ReLU(True))
+        self.add_module(
+            "batchnorm",
+            module_bank[ModuleName.BATCHNORM](num_features=in_channels),
+        )
+        self.add_module("relu", module_bank[ModuleName.ACTIVATION]())
         self.add_module(
             "conv",
-            nn.Conv2d(
-                in_channels, growth_rate, kernel_size=3, stride=1, padding=1, bias=True
+            module_bank[ModuleName.CONV](
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
             ),
         )
+        self.add_module("dropout", module_bank[ModuleName.DROPOUT]())
 
     @staticmethod
     def any_requires_grad(x: torch.Tensor) -> bool:
@@ -76,13 +150,16 @@ class DenseLayer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Computes the foward pass of the layer."""
-        bn_function = _bn_function_factory(self.batchnorm, self.relu, self.conv)  # type: ignore
-        if self.efficient and self.any_requires_grad(x):
+        assert isinstance(self.batchnorm, nn.Module)
+        assert isinstance(self.relu, nn.Module)
+        assert isinstance(self.conv, nn.Module)
+        assert isinstance(self.dropout, nn.Module)
+        bn_function = _bn_function_factory(self.batchnorm, self.relu, self.conv)
+        if self.checkpoint and self.any_requires_grad(x):
             x = cp.checkpoint(bn_function, *x)
         else:
             x = bn_function(*x)
-        if self.dropout and self.dropout != 0.0:
-            x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.dropout(x)
         return x
 
 
@@ -94,22 +171,32 @@ class DenseBlock(nn.ModuleDict):
         in_channels: int,
         growth_rate: int,
         nb_layers: int,
+        module_bank: ModuleBankType,
         upsample: bool = False,
-        batch_norm: str = "batchnorm",
-        dropout: float = 0.2,
-        efficient: bool = False,
+        checkpoint: bool = False,
         prefix: str = "",
-    ):
-        super(DenseBlock, self).__init__()
+    ):  # pylint: disable=too-many-arguments
+        """DenseBlock
+
+        Args:
+            in_channels (int): Number of channels in the input tensor.
+            growth_rate (int): Number of channels in each DenseLayer.
+            nb_layers (int): Number of DenseLayers to use.
+            module_bank (ModuleBankType): The layers to use for common operations.
+            skip_block (bool, optional): Adds a skip-connection over the full
+                DenseBlock. Defaults to False.
+            checkpoint (bool, optional): Memory checkpointing. Defaults to False.
+            prefix (str, optional): Name prefix (pref. in snake case). Defaults to "".
+        """
+        super().__init__()
         for i in range(nb_layers):
             self.add_module(
                 f"{prefix}dense_layer_{i+1}",
                 DenseLayer(
                     in_channels + i * growth_rate,
                     growth_rate,
-                    batch_norm,
-                    dropout,
-                    efficient,
+                    module_bank,
+                    checkpoint,
                 ),
             )
 
@@ -140,85 +227,32 @@ class TransitionDown(nn.Sequential):
         self,
         in_channels: int,
         out_channels: int,
-        batch_norm: str = "batchnorm",
-        dropout: float = 0.2,
-        pooling: str = "max",
+        module_bank: ModuleBankType,
     ):
+        """Layer dedicated to reducing the output width and height by a factor of two.
+
+        Note: The POOLING module must downsize the input by two-folds.
+
+        Args:
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            module_bank (ModuleBankType): The layers to use for common operations.
+        """
         super().__init__()
-        if batch_norm == "batchnorm":
-            self.add_module("batchnorm", nn.BatchNorm2d(in_channels))
-        self.add_module("relu", nn.ReLU(inplace=True))
+        self.add_module("batchnorm", module_bank[ModuleName.BATCHNORM](in_channels))
+        self.add_module("relu", module_bank[ModuleName.ACTIVATION]())
         self.add_module(
             "conv",
-            nn.Conv2d(
+            module_bank[ModuleName.CONV](
                 in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=1,
                 stride=1,
                 padding=0,
-                bias=True,
             ),
         )
-        if dropout and dropout != 0.0:
-            self.add_module("dropout", nn.Dropout2d(0.2))
-        if pooling == "max":
-            self.add_module("pool", nn.MaxPool2d(2))
-        elif pooling == "avg":
-            self.add_module("pool", nn.AvgPool2d(2))
-        elif pooling == "blurpool":
-            self.add_module("blurpool", BlurPool2d(out_channels))
-
-
-class TransitionUp(nn.Module):
-    """Layer that increases the spatial resolution by a factor of 2."""
-
-    def __init__(
-        self, in_channels: int, out_channels: int, upsampling_type: str = "transpose"
-    ):
-        super().__init__()
-        if upsampling_type == "upsample":
-            self.upsampling_layer = nn.Sequential(
-                nn.UpsamplingNearest2d(scale_factor=2),
-                nn.Conv2d(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=3,
-                    padding=1,
-                    bias=True,
-                ),
-                nn.ReLU(inplace=True),
-            )
-        elif upsampling_type == "pixelshuffle":
-            self.upsampling_layer = nn.Sequential(
-                nn.Conv2d(
-                    in_channels=in_channels,
-                    out_channels=4 * out_channels,
-                    kernel_size=3,
-                    padding=True,
-                    bias=True,
-                ),
-                nn.ReLU(inplace=True),
-                nn.PixelShuffle(2),
-            )
-        else:  # Default: "transpose"
-            self.upsampling_layer = nn.Sequential(
-                nn.ConvTranspose2d(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=3,
-                    stride=2,
-                    padding=0,
-                    bias=True,
-                ),
-                nn.ReLU(inplace=True),
-            )
-
-    def forward(self, inp: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
-        """Computes the forward pass of the layer."""
-        out = self.upsampling_layer(inp)
-        out = center_crop(out, skip.size(2), skip.size(3))
-        out = torch.cat([skip, out], 1)
-        return out
+        self.add_module("dropout", module_bank[ModuleName.DROPOUT]())
+        self.add_module("pool", module_bank[ModuleName.POOLING]())
 
 
 def center_crop(layer: torch.Tensor, max_height: int, max_width: int) -> torch.Tensor:
@@ -227,6 +261,34 @@ def center_crop(layer: torch.Tensor, max_height: int, max_width: int) -> torch.T
     xy1 = (width - max_width) // 2
     xy2 = (height - max_height) // 2
     return layer[:, :, xy2 : (xy2 + max_height), xy1 : (xy1 + max_width)]
+
+
+class TransitionUp(nn.Module):
+    """Layer that increases the spatial resolution by a factor of 2."""
+
+    def __init__(
+        self, in_channels: int, out_channels: int, module_bank: ModuleBankType
+    ):
+        """Layer dedicated to increasing the output width and height by a factor of two.
+
+        Note: The UPSAMPLE module must increase the scale of the input by two-folds.
+
+        Args:
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            module_bank (ModuleBankType): The layers to use for common operations.
+        """
+        super().__init__()
+        self.upsampling_layer = module_bank[ModuleName.UPSAMPLE](
+            in_channels, out_channels
+        )
+
+    def forward(self, inp: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        """Computes the forward pass of the layer."""
+        out = self.upsampling_layer(inp)
+        out = center_crop(out, skip.size(2), skip.size(3))
+        out = torch.cat([skip, out], 1)
+        return out
 
 
 class DenseUNet(BaseModel):
@@ -243,112 +305,82 @@ class DenseUNet(BaseModel):
 
     def __init__(
         self,
-        in_channels: int = 3,
-        nb_classes: int = 1,
-        init_conv_size: int = 3,
+        in_channels: int,
+        out_channels: int = 1,
         init_conv_filters: int = 48,
-        init_conv_stride: int = 1,
-        down_blocks: Tuple[int, ...] = (4, 4, 4, 4, 4),
-        bottleneck_layers: int = 4,
-        up_blocks: Tuple[int, ...] = (4, 4, 4, 4, 4),
+        structure: Tuple[List[int], int, List[int]] = (
+            [4, 4, 4, 4, 4],  # Down blocks
+            4,  # bottleneck layers
+            [4, 4, 4, 4, 4],  # Up blocks
+        ),
         growth_rate: int = 12,
         compression: float = 1.0,
-        dropout_rate: float = 0.2,
-        upsampling_type: str = "upsample",
         early_transition: bool = False,
-        transition_pooling: str = "max",
-        batch_norm: str = "batchnorm",
         include_top: bool = True,
-        activation_final: Callable[[torch.Tensor], torch.Tensor] = None,
-        efficient: bool = False,
-    ):
+        checkpoint: bool = False,
+        module_bank: ModuleBankType = None,
+    ):  # pylint: disable=too-many-arguments,too-many-locals
         """Creates a Tiramisu/Fully Convolutional DenseNet Neural Network for
-        image segmentation.
+        dense image prediction (e.g. segmentatation or pixel regression).
 
         Args:
-            nb_classes: The number of classes to predict.
-            in_channels: The number of channels of the input images.
-            init_conv_size: The size of the very first first layer.
-            init_conv_filters: The number of filters of the very first layer.
-            init_conv_stride: The stride of the very first layer.
-            down_blocks: The number of DenseBlocks and their size in the
-                compressive part.
-            bottleneck_layers: The number of DenseBlocks and their size in the
-                bottleneck part.
-            up_blocks: The number of DenseBlocks and their size in the
-                reconstructive part.
-            growth_rate: The rate at which the DenseBlocks layers grow.
-            compression: Optimization where each of the DenseBlocks layers are reduced
-                by a factor between 0 and 1. (1.0 does not change the original arch.)
-            dropout_rate: The dropout rate to use.
-            upsampling_type: The type of upsampling to use in the TransitionUp layers.
-                available options: ["upsample" (default), "transpose", "pixelshuffle"]
-                For Pixel shuffle see: https://arxiv.org/abs/1609.05158
-            early_transition: Optimization where the input is downscaled by a factor
-                of two after the first layer. You can thus reduce the numbers of down
-                and up blocks by 1.
-            transition_pooling: The type of pooling to use during the transitions.
-                available options: ["max" (default), "avg", "blurpool"]
-            batch_norm: Type of batch normalization to use.
-                available options: ["batchnorm" (default), None]
-            include_top (bool): Including the top layer, with the last convolution
-                and softmax/sigmoid (True) or returns the embeddings for each pixel
-                of the input image (False).
-            activation_final (func): Activation function to use at the end of the model.
-            efficient (bool): Memory efficient version of the Tiramisu.
+            in_channels (int): The number of channels of the input images
+            out_channels (int, optional): The number of predicted channels.
+                Defaults to 1.
+            init_conv_filters (int, optional): The number of filters of the
+                very first layer. Defaults to 48.
+            structure (Tuple[List[int], int, List[int]], optional): The number
+                of DenseBlocks that compose the U-Net-shaped model. The tuple
+                corresponds to the number and size of each dense block in,
+                respectively, the encoding part, the bottleneck, and the
+                decoding part. Defaults to (
+                    [4, 4, 4, 4, 4],  # Down blocks
+                    4,  # bottleneck layers
+                    [4, 4, 4, 4, 4],  # Up blocks
+                ).
+            growth_rate (int, optional): The rate at which the DenseBlocks
+                layers grow. Defaults to 12.
+            compression (float, optional): Optimization where each of the
+                DenseBlocks channels are reduced by a factor between 0 and 100%.
+                Defaults to 1.0 (no compression).
+            early_transition (bool, optional): Optimization where the input is
+                downscaled by a factor of two after the first layer without
+                skip-connection. Reduces memory usage. Defaults to False.
+            include_top (bool, optional): Includes the final convolution and
+                activation function. Defaults to True.
+            checkpoint (bool, optional): Activates memory checkpointing, which
+                reduces memory usage but increases latency. Defaults to False.
                 See: https://arxiv.org/pdf/1707.06990.pdf
+            module_bank (ModuleBankType, optional): The layers to use for
+                common operations. Defaults to None (=DEFAULT_MODULE_BANK).
         """
+
         super().__init__()
-        self.nb_classes = nb_classes
+        self.out_channels = out_channels
         self.init_conv_filters = init_conv_filters
-        self.down_blocks = down_blocks
-        self.bottleneck_layers = bottleneck_layers
-        self.up_blocks = up_blocks
+        self.down_blocks = structure[0]
+        self.bottleneck_layers = structure[1]
+        self.up_blocks = structure[2]
         self.growth_rate = growth_rate
         self.compression = compression
         self.early_transition = early_transition
         self.include_top = include_top
-        self.activation_final = activation_final
+        self.module_bank = module_bank or DEFAULT_MODULE_BANK
 
         channels_count = init_conv_filters
         # Keeps track of the number of channels for each skip-connection.
         skip_connections: List[int] = []
 
-        # Check
-        upsampling_whitelist = ["upsample", "transpose", "pixelshuffle"]
-        assert upsampling_type in upsampling_whitelist, (
-            "upsampling_type option does not exist. Valid options are: "
-            f"{upsampling_whitelist}."
-        )
-        transition_pooling_whitelist = ["max", "avg", "blurpool"]
-        assert transition_pooling in transition_pooling_whitelist, (
-            "transition_pooling option does not exist. Valid options are: "
-            f"{transition_pooling_whitelist}."
-        )
-        batch_norm_whitelist = ["batchnorm", None]
-        assert batch_norm in batch_norm_whitelist, (
-            "batch_norm option does not exist. Valid options are: "
-            f"{batch_norm_whitelist}."
-        )
-
         # First layer
-        init_conv_padding = (init_conv_size - 1) >> 1
-        self.conv_init = nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=init_conv_filters,
-            kernel_size=init_conv_size,
-            stride=init_conv_stride,
-            padding=init_conv_padding,
-            bias=True,
+        self.conv_init = self.module_bank[ModuleName.CONV_INIT](
+            in_channels=in_channels, out_channels=init_conv_filters
         )
 
         if early_transition:
             self.early_transition_down = TransitionDown(
                 in_channels=channels_count,
                 out_channels=int(channels_count * compression),
-                batch_norm=batch_norm,
-                dropout=dropout_rate,
-                pooling=transition_pooling,
+                module_bank=self.module_bank,
             )
             channels_count = int(channels_count * compression)
 
@@ -362,10 +394,9 @@ class DenseUNet(BaseModel):
                     in_channels=channels_count,
                     growth_rate=growth_rate,
                     nb_layers=block_size,
+                    module_bank=self.module_bank,
                     upsample=False,
-                    batch_norm=batch_norm,
-                    dropout=dropout_rate,
-                    efficient=efficient,
+                    checkpoint=checkpoint,
                     prefix="layers_down_{i}_",
                 ),
             )
@@ -376,9 +407,7 @@ class DenseUNet(BaseModel):
                 TransitionDown(
                     in_channels=channels_count,
                     out_channels=int(channels_count * compression),
-                    batch_norm=batch_norm,
-                    dropout=dropout_rate,
-                    pooling=transition_pooling,
+                    module_bank=self.module_bank,
                 ),
             )
             channels_count = int(channels_count * compression)
@@ -387,14 +416,13 @@ class DenseUNet(BaseModel):
         self.bottleneck = DenseBlock(
             in_channels=channels_count,
             growth_rate=growth_rate,
-            nb_layers=bottleneck_layers,
+            nb_layers=self.bottleneck_layers,
+            module_bank=self.module_bank,
             upsample=True,
-            batch_norm=batch_norm,
-            dropout=dropout_rate,
-            efficient=efficient,
+            checkpoint=checkpoint,
             prefix="bottleneck_",
         )
-        prev_block_channels = growth_rate * bottleneck_layers
+        prev_block_channels = growth_rate * self.bottleneck_layers
         channels_count += prev_block_channels
 
         # Upsampling part
@@ -406,7 +434,7 @@ class DenseUNet(BaseModel):
                 TransitionUp(
                     in_channels=prev_block_channels,
                     out_channels=prev_block_channels,
-                    upsampling_type=upsampling_type,
+                    module_bank=self.module_bank,
                 ),
             )
             channels_count = prev_block_channels + skip_connections[i]
@@ -416,10 +444,9 @@ class DenseUNet(BaseModel):
                     in_channels=channels_count,
                     growth_rate=growth_rate,
                     nb_layers=block_size,
+                    module_bank=self.module_bank,
                     upsample=True,
-                    batch_norm=batch_norm,
-                    dropout=dropout_rate,
-                    efficient=efficient,
+                    checkpoint=checkpoint,
                     prefix="layers_up_{i}_",
                 ),
             )
@@ -431,7 +458,7 @@ class DenseUNet(BaseModel):
             TransitionUp(
                 in_channels=prev_block_channels,
                 out_channels=prev_block_channels,
-                upsampling_type=upsampling_type,
+                module_bank=self.module_bank,
             ),
         )
         channels_count = prev_block_channels + skip_connections[-1]
@@ -440,34 +467,33 @@ class DenseUNet(BaseModel):
             DenseBlock(
                 in_channels=channels_count,
                 growth_rate=growth_rate,
-                nb_layers=up_blocks[-1],
+                nb_layers=self.up_blocks[-1],
+                module_bank=self.module_bank,
                 upsample=False,
-                batch_norm=batch_norm,
-                dropout=dropout_rate,
-                efficient=efficient,
+                checkpoint=checkpoint,
                 prefix="layers_up_last_",
             ),
         )
-        channels_count += growth_rate * up_blocks[-1]
+        channels_count += growth_rate * self.up_blocks[-1]
 
         if early_transition:
             self.early_transition_up = TransitionUp(
                 in_channels=channels_count,
                 out_channels=channels_count,
-                upsampling_type=upsampling_type,
+                module_bank=self.module_bank,
             )
             channels_count += init_conv_filters
 
         # Last layer
         if include_top:
-            self.final_conv = nn.Conv2d(
+            self.conv_final = self.module_bank[ModuleName.CONV_FINAL](
                 in_channels=channels_count,
-                out_channels=nb_classes,
+                out_channels=out_channels,
                 kernel_size=1,
                 stride=1,
                 padding=0,
-                bias=True,
             )
+            self.activation_final = self.module_bank[ModuleName.ACTIVATION_FINAL]()
 
     def forward(self, inp: torch.Tensor) -> torch.Tensor:
         """Computes the forward pass of the Tiramisu network."""
@@ -500,10 +526,8 @@ class DenseUNet(BaseModel):
 
         if self.include_top:
             # Computation of the final 1x1 convolution
-            y_pred = self.final_conv(x)
-            if self.activation_final:
-                return self.activation_final(y_pred)
-            return y_pred
+            y_pred = self.conv_final(x)
+            return self.activation_final(y_pred)
 
         return x
 
@@ -543,6 +567,6 @@ class DenseUNet(BaseModel):
             channels_count.append(channels_count[-1] + self.init_conv_filters)
 
         if self.include_top:
-            channels_count.append(self.nb_classes)
+            channels_count.append(self.out_channels)
 
         return channels_count
