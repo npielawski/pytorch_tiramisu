@@ -1,47 +1,65 @@
-[![Python 3.6](https://img.shields.io/badge/python-3.6-blue.svg)](https://www.python.org/downloads/release/python-360/) [![DOI](https://zenodo.org/badge/242668685.svg)](https://zenodo.org/badge/latestdoi/242668685)
+[![Python 3.9](https://img.shields.io/badge/python-3.9-blue.svg)](https://www.python.org/downloads/release/python-390/) 
+[![DOI](https://zenodo.org/badge/242668685.svg)](https://zenodo.org/badge/latestdoi/242668685) 
+![GitHub](https://img.shields.io/github/license/npielawski/pytorch_tiramisu)
+
+<p align="center">
+  <img src="resources/tiramisu64.png" style="image-rendering: pixelated;" width=128 />
+</p>
 
 # 🔥 Better Tiramisu for PyTorch 🔥
 
-Implementation of the Tiramisu Neural network for PyTorch with new features such
-as:
+Implementation of the Tiramisu Neural network for PyTorch with new features such as:
+
 * Memory-efficient version (trade-off between memory and speed).
 * Different types of upsampling (transposed convolution, upsampling and pixel shuffle).
 * Different types of pooling (max-pooling, avg-pooling, blur-pooling).
 * The depth and width of the Tiramisu is fully configurable.
 * Early-transition can be enabled when the input images are big.
-* The activation function of the last layer can be disabled or modified.
-
+* The activation functions of all layers can be modified to something trendier.
 
 ## Getting Started
 
 The package can be installed from the repository with:
+
 ```console
-$ pip3 install git+https://github.com/npielawski/pytorch_tiramisu
+> pip3 install git+https://github.com/npielawski/pytorch_tiramisu
 ```
 
 You can try the model in Python with:
+
 ```py
-from tiramisu import DenseUNet
+from functools import partial
+import torch
+from torch import nn
+from tiramisu import DenseUNet, DEFAULT_MODULE_BANK, ModuleName
+
+module_bank = DEFAULT_MODULE_BANK.copy()
+# Dropout
+module_bank[ModuleName.DROPOUT] = partial(nn.Dropout2d, p=0.2, inplace=True)
+# Every activation in the model is going to be a GELU (Gaussian Error Linear 
+# Units function). GELU(x) = x * Φ(x)
+# See: https://pytorch.org/docs/stable/generated/torch.nn.GELU.html
+module_bank[ModuleName.ACTIVATION] = nn.GELU
+# Example for segmentation:
+module_bank[ModuleName.ACTIVATION_FINAL] = partial(nn.LogSoftmax, dim=1)
+# Example for regression (default):
+#module_bank[ModuleName.ACTIVATION_FINAL] = nn.Identity
 
 model = DenseUNet(
-    in_channels=3,
-    nb_classes=1,
-    init_conv_size=3,
-    init_conv_filters=48,
-    init_conv_stride=1,
-    down_blocks=(4, 4, 4, 4, 4),
-    bottleneck_layers=4,
-    up_blocks=(4, 4, 4, 4, 4),
-    growth_rate=12,
-    compression=1.0,
-    dropout_rate=0.2,
-    upsampling_type="upsample",
-    early_transition=False,
-    transition_pooling="max",
-    batch_norm="batchnorm",
-    include_top=True,
-    activation_func=None,
-    efficient=False,
+    in_channels = 3,          # RGB images
+    out_channels = 5,         # 5-channel output (5 classes)
+    init_conv_filters = 48,   # Number of channels outputted by the 1st convolution
+    structure = (
+        [4, 4, 4, 4, 4],      # Down blocks
+        4,                    # bottleneck layers
+        [4, 4, 4, 4, 4],      # Up blocks
+    ),
+    growth_rate = 12,         # Growth rate of the DenseLayers
+    compression = 1.0,        # No compression
+    early_transition = False, # No early transition
+    include_top = True,       # Includes last layer and activation
+    checkpoint = False,       # No memory checkpointing
+    module_bank = module_bank # Modules to use
 )
 
 # Initializes all the convolutional kernel weights.
@@ -50,44 +68,63 @@ model.initialize_kernels(nn.init.kaiming_uniform_, conv=True)
 model.summary()
 ```
 
-This example tiramisu network has a depth of len(down_blocks) = 5.
-
+This example tiramisu network has a depth of len(down_blocks) = 5, meaning that the
+input images should be at least 32x32 pixels (i.e. 2^5=32).
 
 ## Documentation
 
 The parameters of the constructor are explained as following:
-* nb_classes: The number of classes to predict.
-* in_channels: The number of channels of the input images.
-* init_conv_size: The size of the very first first layer.
-* init_conv_filters: The number of filters of the very first layer.
-* init_conv_stride: The stride of the very first layer.
-* down_blocks: The number of DenseBlocks and their size in the
-    compressive part.
-* bottleneck_layers: The number of DenseBlocks and their size in the
-    bottleneck part.
-* up_blocks: The number of DenseBlocks and their size in the
-    reconstructive part.
-* growth_rate: The rate at which the DenseBlocks layers grow.
-* compression: Optimization where each of the DenseBlocks layers are reduced
-    by a factor between 0 and 1. (1.0 does not change the original arch.)
-* dropout_rate: The dropout rate to use.
-* upsampling_type: The type of upsampling to use in the TransitionUp layers.
-    available options: ["upsample" (default), "transpose", "pixelshuffle"]
-    For Pixel shuffle see: https://arxiv.org/abs/1609.05158
-* early_transition: Optimization where the input is downscaled by a factor
-    of two after the first layer. You can thus reduce the numbers of down
-    and up blocks by 1.
-* transition_pooling: The type of pooling to use during the transitions.
-    available options: ["max" (default), "avg", "blurpool"]
-* batch_norm: Type of batch normalization to use.
-    available options: ["batchnorm" (default), None]
-* include_top (bool): Including the top layer, with the last convolution
-    and softmax/sigmoid (True) or returns the embeddings for each pixel
-    of the input image (False).
-* activation_func (func): Activation function to use at the end of the model.
-* efficient (bool): Memory efficient version of the Tiramisu.
-    See: https://arxiv.org/pdf/1707.06990.pdf
 
+* in_channels: The number of channels of the input image (e.g. 1 for grayscale, 3 for
+  RGB).
+* out_channels: The number of output channels (e.g. C for C classes).
+* init_conv_filters: The number of filters in the very first convolution.
+* structure: Divided in three parts (down blocks, bottleneck and up blocks) which
+  describe the depth of the neural network (how many levels there are) and how many
+  DenseLayers each of those levels have.
+* growth_rate: Describes the size of each convolution in the DenseLayers. At each conv.
+  the DenseLayer grows by this many channels.
+* compression: The compression of the DenseLayers to reduce the memory footprint and
+  computational complexity of the model.
+* early_transition: Optimization where the input is downscaled by a factor of two after
+  the first layer by using a down-transition (without skip-connection) early on.
+* include_top: Including the top layer, with the last convolution and activation (True)
+  or returns the embeddings for each pixel.
+* checkpoint: Activates memory checkpointing, a memory efficient version of the
+  Tiramisu. See: [https://arxiv.org/pdf/1707.06990.pdf](https://arxiv.org/pdf/1707.06990.pdf)
+* module_bank: The bank of layers the Tiramisu uses to build itself. See next subsection
+  for details.
+
+### Module bank
+
+The Tiramisu base layers (e.g. Conv2D, activation functions, etc.) can be set
+to different types of layers. This was introduced to wrap many arguments of the
+main class under the same object and increase the flexibility to change layers.
+
+The layers that can be redefined are:
+
+* CONV: Convolution operations in the full model. Change with care.
+* CONV_INIT: Initial (1st) convolution operation. Note: Kernel size must be provided.
+* CONV_FINAL: Final convolution. Will be set to a 1x1 kernel and reduce output to C
+  classes.
+* BATCHNORM: Batch normalization in the full model.
+* POOLING: Pooling operation. Note: must reduce input size by a factor of two. If the
+  size is odd, round *up* to the closest integer.
+* DROPOUT: Dropout. The p value must be provided through partial.
+* UPSAMPLE: Upsampling operation (must be by a factor of two)
+* ACTIVATION: Activation function to use everywhere
+* ACTIVATION_FINAL: Act. function at the last layer (e.g. softmax, nn.Identity)
+
+
+Notes:
+
+* For pooling common options are nn.MaxPool2d, nn.AvgPool2d, or even
+  tiramisu.layers.blurpool.BlurPool2d.
+* For upsampling, there are some presets: UPSAMPLE_NEAREST (default),
+  UPSAMPLE_PIXELSHUFFLE, UPSAMPLE_TRANSPOSE (known to produce artifacts).
+* The layers can be set to nn.Identity to be bypassed (e.g. if one wants to remove the
+  dropout layer, or the final activation).
+* The partial function can prefill some of the arguments to be used in the model.
 
 ## Tips and tricks
 
@@ -103,30 +140,28 @@ are hard to manage and [may create a lot of gridding artefacts](https://distill.
 * Use blurpooling if you want the neural network to be shift-invariant (good accuracy
 even when shifting the input).
 
-
 ## Built With
 
 * [Pytorch](https://pytorch.org/) - Version >=1.4.0 (for memory efficient version)
-
 
 ## Contributing
 
 See also the list of [contributors](https://github.com/npielawski/torch_tiramisu/contributors) who participated in this project.
 For contributing, make sure the code passes the checks of [Pylama](https://github.com/klen/pylama), [Bandit](https://github.com/PyCQA/bandit) and [Mypy](https://github.com/python/mypy).
-
+Additionally, the code is formatted with [Black](https://github.com/psf/black).
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
 
-
 ## Acknowledgments
 
 Acknowledging and citing is appreciated and encouraged.
 
-Zenodo record: https://zenodo.org/record/3685491
+Zenodo record: [https://zenodo.org/record/3685491](https://zenodo.org/record/3685491)
 
 Cite as:
-```
+
+```MLA
 Nicolas Pielawski. (2020, February 24). npielawski/pytorch_tiramisu: Better Tiramisu 1.0 (Version 1.0). Zenodo. http://doi.org/10.5281/zenodo.3685491
 ```

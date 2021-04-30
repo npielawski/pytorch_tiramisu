@@ -30,13 +30,13 @@ class ModuleName(Enum):
     CONV = auto()  # Convolution operations
     CONV_INIT = auto()  # Initial (1st) conv. operation. Kernel size must be provided.
     CONV_FINAL = auto()  # Final convolution. 1x1 kernel and reduce output to C classes.
-    BATCHNORM = auto()  # Batch normalization (optional)
+    BATCHNORM = auto()  # Batch normalization
     POOLING = auto()  # Pooling operation (must reduce input size by a factor of two)
     # Note: if the size is odd, round *up* to the closest integer.
-    DROPOUT = auto()  # Dropout (optional)
+    DROPOUT = auto()  # Dropout
     UPSAMPLE = auto()  # Upsampling operation (must be by a factor of two)
     ACTIVATION = auto()  # Activation function to use everywhere
-    ACTIVATION_FINAL = auto()  # Act. function at the last layer (e.g.softmax, optional)
+    ACTIVATION_FINAL = auto()  # Act. function at the last layer (e.g.softmax)
 
 
 ModuleBankType = Mapping[ModuleName, Callable[..., nn.Module]]
