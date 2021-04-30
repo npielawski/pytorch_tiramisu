@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="tiramisu",
-    version="1.0",
+    version="1.1",
     description="Better Tiramisu Neural Network",
     long_description=long_description,
     long_description_content_type="text/markdown",
