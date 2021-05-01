@@ -93,10 +93,8 @@ def _bn_function_factory(
     """This function is necessary to implement checkpointing."""
 
     def bn_function(*inputs: torch.Tensor) -> torch.Tensor:
-        concated_features = torch.cat(inputs, 1)
-        if norm is not None:
-            concated_features = norm(concated_features)
-        bottleneck_output = conv(relu(concated_features))
+        concatenated_features = torch.cat(inputs, 1)
+        bottleneck_output = conv(relu(norm(concatenated_features)))
         return bottleneck_output
 
     return bn_function
