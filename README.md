@@ -157,9 +157,10 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## Acknowledgments
 
-Acknowledging and citing is appreciated and encouraged.
+Many thanks to @RaphaelaHeil for her much appreciated advices on best practices.
 
-Zenodo record: [https://zenodo.org/record/3685491](https://zenodo.org/record/3685491)
+Acknowledging this repository and citing it is appreciated. The static record is
+available on Zenodo: [https://zenodo.org/record/3685491](https://zenodo.org/record/3685491)
 
 Cite as:
 
