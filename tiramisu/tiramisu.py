@@ -172,7 +172,7 @@ class DenseBlock(nn.ModuleDict):
         growth_rate: int,
         nb_layers: int,
         module_bank: ModuleBankType,
-        upsample: bool = False,
+        skip_block: bool = False,
         checkpoint: bool = False,
         prefix: str = "",
     ):  # pylint: disable=too-many-arguments
@@ -200,7 +200,7 @@ class DenseBlock(nn.ModuleDict):
                 ),
             )
 
-        self.upsample = upsample
+        self.skip_block = skip_block
 
     def forward(self, inp: torch.Tensor) -> torch.Tensor:  # type: ignore # pylint: disable=arguments-differ
         """Computes the forward pass of the denseblock."""
@@ -210,7 +210,7 @@ class DenseBlock(nn.ModuleDict):
             out = layer(skip_connections)
             skip_connections.append(out)
 
-        if self.upsample:
+        if self.skip_block:
             # Returns all of the x's, except for the first x (inp), concatenated
             # As we are not supposed to have skip connections over the full dense block.
             # See original tiramisu paper for more details
@@ -395,7 +395,7 @@ class DenseUNet(BaseModel):
                     growth_rate=growth_rate,
                     nb_layers=block_size,
                     module_bank=self.module_bank,
-                    upsample=False,
+                    skip_block=False,
                     checkpoint=checkpoint,
                     prefix="layers_down_{i}_",
                 ),
@@ -418,7 +418,7 @@ class DenseUNet(BaseModel):
             growth_rate=growth_rate,
             nb_layers=self.bottleneck_layers,
             module_bank=self.module_bank,
-            upsample=True,
+            skip_block=True,
             checkpoint=checkpoint,
             prefix="bottleneck_",
         )
@@ -445,7 +445,7 @@ class DenseUNet(BaseModel):
                     growth_rate=growth_rate,
                     nb_layers=block_size,
                     module_bank=self.module_bank,
-                    upsample=True,
+                    skip_block=True,
                     checkpoint=checkpoint,
                     prefix="layers_up_{i}_",
                 ),
@@ -469,7 +469,7 @@ class DenseUNet(BaseModel):
                 growth_rate=growth_rate,
                 nb_layers=self.up_blocks[-1],
                 module_bank=self.module_bank,
-                upsample=False,
+                skip_block=False,
                 checkpoint=checkpoint,
                 prefix="layers_up_last_",
             ),
