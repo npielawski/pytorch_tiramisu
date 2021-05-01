@@ -65,7 +65,7 @@ class BaseModel(nn.Module, ABC):
         Note: this function fixes an issue on BatchNorm being half precision.
             See: https://discuss.pytorch.org/t/training-with-half-precision/11815/2
         """
-        super(BaseModel, self).half()
+        super().half()
         for layer in self.modules():
             if isinstance(layer, nn.BatchNorm2d):
                 layer.float()
