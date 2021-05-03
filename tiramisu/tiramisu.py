@@ -87,15 +87,17 @@ DEFAULT_MODULE_BANK: ModuleBankType = {
 
 def _bn_function_factory(
     norm: nn.Module,
-    relu: nn.Module,
+    activation: nn.Module,
     conv: nn.Module,
 ) -> Callable[..., torch.Tensor]:
-    """This function is necessary to implement checkpointing."""
+    """This returns a callback to implement checkpointing."""
 
-    def bn_function(*inputs: torch.Tensor) -> torch.Tensor:
-        concatenated_features = torch.cat(inputs, 1)
-        bottleneck_output = conv(relu(norm(concatenated_features)))
-        return bottleneck_output
+    def bn_function(x: torch.Tensor) -> torch.Tensor:
+        x = norm(x)
+        x = activation(x)
+        x = conv(x)
+        return x
+        #return conv(relu(norm(x)))
 
     return bn_function
 
@@ -154,9 +156,9 @@ class DenseLayer(nn.Module):
         assert isinstance(self.dropout, nn.Module)
         bn_function = _bn_function_factory(self.batchnorm, self.relu, self.conv)
         if self.checkpoint and self.any_requires_grad(x):
-            x = cp.checkpoint(bn_function, *x)
+            x = cp.checkpoint(bn_function, x)
         else:
-            x = bn_function(*x)
+            x = bn_function(x)
         x = self.dropout(x)
         return x
 
