@@ -13,7 +13,7 @@ TODO:
 from collections.abc import Callable
 from enum import Enum, auto
 from functools import partial
-from typing import List, Mapping, Tuple
+from typing import Dict, List, Tuple
 
 # Deep Learning imports
 import torch
@@ -39,7 +39,7 @@ class ModuleName(Enum):
     ACTIVATION_FINAL = auto()  # Act. function at the last layer (e.g.softmax)
 
 
-ModuleBankType = Mapping[ModuleName, Callable[..., nn.Module]]
+ModuleBankType = Dict[ModuleName, Callable[..., nn.Module]]
 
 UPSAMPLE_NEAREST = lambda in_channels, out_channels: nn.Sequential(
     nn.UpsamplingNearest2d(),
