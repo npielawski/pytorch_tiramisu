@@ -3,20 +3,21 @@
 ![GitHub](https://img.shields.io/github/license/npielawski/pytorch_tiramisu)
 
 <p align="center">
-  <img src="resources/tiramisu64.png" style="image-rendering: pixelated;" width=128 />
+  <img src="resources/tiramisu64_hd.png" style="image-rendering: pixelated;" width=128 />
 </p>
 
 # 🔥 Better Tiramisu for PyTorch 🔥
 
 Implementation of the Tiramisu Neural network for PyTorch with new features such as:
 
-* Memory-efficient version (trade-off between memory and speed).
-* Different types of upsampling (transposed convolution, upsampling and pixel shuffle).
-* Different types of pooling (max-pooling, avg-pooling, blur-pooling).
-* The depth and width of the Tiramisu is fully configurable.
-* Early-transition can be enabled when the input images are big.
-* The activation functions of all layers can be modified to something trendier.
+* 💾 Memory-efficient version (trade-off between memory and speed).
+* 🖼 Different types of upsampling (transposed convolution, upsampling and pixel shuffle).
+* 🏊‍♀️ Different types of pooling (max-pooling, avg-pooling, blur-pooling).
+* 🏗 The depth and width of the Tiramisu is fully configurable.
+* 🔬 Early-transition can be enabled when the input images are big.
+* 👸🏼 The activation functions of all layers can be modified to something trendier.
 * 🎉 Won a competition (Adipocyte Cell Imaging Challenge)! [Preprint of the winners is here](https://www.biorxiv.org/content/10.1101/2021.01.18.427121v3).
+* 🎉 Was used in a NeurIPS paper! [Abstract and paper are here](https://proceedings.neurips.cc//paper/2020/hash/d6428eecbe0f7dff83fc607c5044b2b9-Abstract.html).
 
 ## Getting Started
 
@@ -115,7 +116,6 @@ The layers that can be redefined are:
 * UPSAMPLE: Upsampling operation (must be by a factor of two)
 * ACTIVATION: Activation function to use everywhere
 * ACTIVATION_FINAL: Act. function at the last layer (e.g. softmax, nn.Identity)
-
 
 Notes:
 
