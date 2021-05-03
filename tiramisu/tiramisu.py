@@ -85,7 +85,7 @@ DEFAULT_MODULE_BANK: ModuleBankType = {
 }
 
 
-def _bn_function_factory(
+def _denselayer_factory(
     norm: nn.Module,
     activation: nn.Module,
     conv: nn.Module,
@@ -97,7 +97,6 @@ def _bn_function_factory(
         x = activation(x)
         x = conv(x)
         return x
-        #return conv(relu(norm(x)))
 
     return bn_function
 
@@ -143,19 +142,14 @@ class DenseLayer(nn.Module):
         )
         self.add_module("dropout", module_bank[ModuleName.DROPOUT]())
 
-    @staticmethod
-    def any_requires_grad(x: torch.Tensor) -> bool:
-        """Returns True if any of the layers in x requires gradients."""
-        return any(layer.requires_grad for layer in x)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Computes the foward pass of the layer."""
         assert isinstance(self.batchnorm, nn.Module)
         assert isinstance(self.relu, nn.Module)
         assert isinstance(self.conv, nn.Module)
         assert isinstance(self.dropout, nn.Module)
-        bn_function = _bn_function_factory(self.batchnorm, self.relu, self.conv)
-        if self.checkpoint and self.any_requires_grad(x):
+        bn_function = _denselayer_factory(self.batchnorm, self.relu, self.conv)
+        if self.checkpoint and x.requires_grad:
             x = cp.checkpoint(bn_function, x)
         else:
             x = bn_function(x)
@@ -256,7 +250,7 @@ class TransitionDown(nn.Sequential):
 
 
 def center_crop(layer: torch.Tensor, max_height: int, max_width: int) -> torch.Tensor:
-    """ Crops a given to a certain size by removing equal margins all around."""
+    """ Crops a given layer to a certain size by removing equal margins all around."""
     _, _, height, width = layer.size()
     xy1 = (width - max_width) // 2
     xy2 = (height - max_height) // 2
