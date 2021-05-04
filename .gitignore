@@ -170,3 +170,8 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Mock data foor testing is downloaded whenever needed
+test/data
+# Output of the neural network during testing
+test/output

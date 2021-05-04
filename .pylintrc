@@ -1,11 +1,12 @@
 [MESSAGES CONTROL]
 disable =
     too-many-instance-attributes, # R0902
-    locally-disabled # I0011
+    locally-disabled, # I0011
+    missing-module-docstring # C0114
 
 [FORMAT]
 # List of variable names that should always be accepted.
-good-names = i,j,k,x,y
+good-names = e,i,j,k,x,X,y
 
 [TYPECHECK]
 # List of members which are set dynamically and missed by Pylint inference
