@@ -13,7 +13,7 @@ TODO:
 from collections.abc import Callable
 from enum import Enum, auto
 from functools import partial
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 # Deep Learning imports
 import torch
@@ -41,28 +41,28 @@ class ModuleName(Enum):
 
 ModuleBankType = Dict[ModuleName, Callable[..., nn.Module]]
 
-UPSAMPLE_NEAREST = lambda in_channels, out_channels: nn.Sequential(
-    nn.UpsamplingNearest2d(),
-    nn.Conv2d(
+UPSAMPLE2D_NEAREST = lambda in_channels, out_channels, module_bank: nn.Sequential(
+    nn.UpsamplingNearest2d(scale_factor=2),
+    module_bank[ModuleName.CONV](
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=3,
         padding=1,
     ),
-    nn.ReLU(inplace=True),
+    module_bank[ModuleName.ACTIVATION](),
 )
 # Pixel shuffle see: https://arxiv.org/abs/1609.05158
-UPSAMPLE_PIXELSHUFFLE = lambda in_channels, out_channels: nn.Sequential(
-    nn.Conv2d(
+UPSAMPLE2D_PIXELSHUFFLE = lambda in_channels, out_channels, module_bank: nn.Sequential(
+    module_bank[ModuleName.CONV](
         in_channels=in_channels,
         out_channels=4 * out_channels,
         kernel_size=3,
         padding=1,
     ),
-    nn.ReLU(inplace=True),
+    module_bank[ModuleName.ACTIVATION](),
     nn.PixelShuffle(2),
 )
-UPSAMPLE_TRANPOSE = lambda in_channels, out_channels: nn.Sequential(
+UPSAMPLE2D_TRANPOSE = lambda in_channels, out_channels, module_bank: nn.Sequential(
     nn.ConvTranspose2d(
         in_channels=in_channels,
         out_channels=out_channels,
@@ -70,16 +70,16 @@ UPSAMPLE_TRANPOSE = lambda in_channels, out_channels: nn.Sequential(
         stride=2,
         padding=0,
     ),
-    nn.ReLU(inplace=True),
+    module_bank[ModuleName.ACTIVATION](),
 )
 DEFAULT_MODULE_BANK: ModuleBankType = {
     ModuleName.CONV: nn.Conv2d,
     ModuleName.CONV_INIT: partial(nn.Conv2d, kernel_size=3, padding=1),
     ModuleName.CONV_FINAL: nn.Conv2d,
     ModuleName.BATCHNORM: nn.BatchNorm2d,
-    ModuleName.POOLING: nn.MaxPool2d,
+    ModuleName.POOLING: partial(nn.MaxPool2d, kernel_size=2),
     ModuleName.DROPOUT: partial(nn.Dropout2d, p=0.2, inplace=True),
-    ModuleName.UPSAMPLE: UPSAMPLE_NEAREST,
+    ModuleName.UPSAMPLE: UPSAMPLE2D_NEAREST,
     ModuleName.ACTIVATION: partial(nn.ReLU, inplace=True),
     ModuleName.ACTIVATION_FINAL: nn.Identity,
 }
@@ -92,7 +92,8 @@ def _denselayer_factory(
 ) -> Callable[..., torch.Tensor]:
     """This returns a callback to implement checkpointing."""
 
-    def bn_function(x: torch.Tensor) -> torch.Tensor:
+    def bn_function(*inputs: torch.Tensor) -> torch.Tensor:
+        x = torch.cat(inputs, dim=1)
         x = norm(x)
         x = activation(x)
         x = conv(x)
@@ -142,17 +143,23 @@ class DenseLayer(nn.Module):
         )
         self.add_module("dropout", module_bank[ModuleName.DROPOUT]())
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def any_requires_grad(x: List[torch.Tensor]) -> bool:
+        """Returns True if any of the layers in x requires gradients."""
+        return any(layer.requires_grad for layer in x)
+
+    def forward(self, inp: Union[List[torch.Tensor], torch.Tensor]) -> torch.Tensor:
         """Computes the foward pass of the layer."""
+        inputs = inp if isinstance(inp, list) else [inp]  # Ensures inputs is a list
         assert isinstance(self.batchnorm, nn.Module)
         assert isinstance(self.relu, nn.Module)
         assert isinstance(self.conv, nn.Module)
         assert isinstance(self.dropout, nn.Module)
         bn_function = _denselayer_factory(self.batchnorm, self.relu, self.conv)
-        if self.checkpoint and x.requires_grad:
-            x = cp.checkpoint(bn_function, x)
+        if self.checkpoint and self.any_requires_grad(inputs):
+            x = cp.checkpoint(bn_function, *inputs)
         else:
-            x = bn_function(x)
+            x = bn_function(*inputs)
         x = self.dropout(x)
         return x
 
@@ -274,7 +281,7 @@ class TransitionUp(nn.Module):
         """
         super().__init__()
         self.upsampling_layer = module_bank[ModuleName.UPSAMPLE](
-            in_channels, out_channels
+            in_channels, out_channels, module_bank
         )
 
     def forward(self, inp: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
@@ -391,7 +398,7 @@ class DenseUNet(BaseModel):
                     module_bank=self.module_bank,
                     skip_block=False,
                     checkpoint=checkpoint,
-                    prefix="layers_down_{i}_",
+                    prefix=f"layers_down_{i}_",
                 ),
             )
             channels_count += growth_rate * block_size
@@ -441,7 +448,7 @@ class DenseUNet(BaseModel):
                     module_bank=self.module_bank,
                     skip_block=True,
                     checkpoint=checkpoint,
-                    prefix="layers_up_{i}_",
+                    prefix=f"layers_up_{i}_",
                 ),
             )
             prev_block_channels = growth_rate * block_size
