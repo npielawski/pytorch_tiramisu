@@ -77,7 +77,7 @@ DEFAULT_MODULE_BANK: ModuleBankType = {
     ModuleName.CONV_INIT: partial(nn.Conv2d, kernel_size=3, padding=1),
     ModuleName.CONV_FINAL: nn.Conv2d,
     ModuleName.BATCHNORM: nn.BatchNorm2d,
-    ModuleName.POOLING: partial(nn.MaxPool2d, kernel_size=2),
+    ModuleName.POOLING: partial(nn.MaxPool2d, kernel_size=2, ceil_mode=True),
     ModuleName.DROPOUT: partial(nn.Dropout2d, p=0.2, inplace=True),
     ModuleName.UPSAMPLE: UPSAMPLE2D_NEAREST,
     ModuleName.ACTIVATION: partial(nn.ReLU, inplace=True),
@@ -264,6 +264,16 @@ def center_crop(layer: torch.Tensor, max_height: int, max_width: int) -> torch.T
     return layer[:, :, xy2 : (xy2 + max_height), xy1 : (xy1 + max_width)]
 
 
+def crop_asym_like(layer: torch.Tensor, like: torch.Tensor) -> torch.Tensor:
+    """Crops the right and bottom part of a tensor to look like `like`."""
+    _, _, height_old, width_old = layer.size()
+    _, _, height_new, width_new = like.size()
+    assert (height_old >= height_new) and (
+        width_old >= width_new
+    ), "The size of the input layer is smaller than the desired one."
+    return layer[:, :, :height_new, :width_new]
+
+
 class TransitionUp(nn.Module):
     """Layer that increases the spatial resolution by a factor of 2."""
 
@@ -287,7 +297,7 @@ class TransitionUp(nn.Module):
     def forward(self, inp: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         """Computes the forward pass of the layer."""
         out = self.upsampling_layer(inp)
-        out = center_crop(out, skip.size(2), skip.size(3))
+        out = crop_asym_like(out, skip)
         out = torch.cat([skip, out], 1)
         return out
 

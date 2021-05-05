@@ -11,7 +11,8 @@
 Implementation of the Tiramisu Neural network for PyTorch with new features such as:
 
 * 💾 Memory-efficient version (trade-off between memory and speed).
-* 🖼 Different types of upsampling (transposed convolution, upsampling and pixel shuffle).
+* 🖼 Works with any input size (not only powers of 2 anymore).
+* 👁 Different types of upsampling (transposed convolution, upsampling and pixel shuffle).
 * 🏊‍♀️ Different types of pooling (max-pooling, avg-pooling, blur-pooling).
 * 🏗 The depth and width of the Tiramisu is fully configurable.
 * 🔬 Early-transition can be enabled when the input images are big.

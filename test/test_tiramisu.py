@@ -243,6 +243,12 @@ class TestDenseUNet(torch_unittest.TestCase):
                     self.assertIsNotNone(param)
                     self.assertNotEqual(torch.sum(param.grad ** 2).item(), 0.0)
 
+    def test_image101(self) -> None:
+        """Checks for inputing images that do not have a power of 2 for size."""
+        X = self.X[:, :, :101, :101]
+        y_pred = self.model(X)
+        self.assertEqual(X.size()[2:], y_pred.size()[2:])
+
 
 if __name__ == "__main__":
     unittest.main()
