@@ -141,6 +141,10 @@ reducing the growth rate and finally the number of dense blocks in the down/up b
 are hard to manage and [may create a lot of gridding artefacts](https://distill.pub/2016/deconv-checkerboard/).
 * Use blurpooling if you want the neural network to be shift-invariant (good accuracy
 even when shifting the input).
+* The model creates border artifacts at the edge, which can be mitigated by changing
+the padding_mode argument of the Conv2d in the module bank. For instance, using
+"reflect" instead of "zeros" will create a smooth continuation in the boundaries
+instead of an edge.
 
 ## Built With
 
