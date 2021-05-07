@@ -6,6 +6,8 @@
   <img src="resources/tiramisu64_hd.png" style="image-rendering: pixelated;" width=128 />
 </p>
 
+# DEPRECATED! Please use [OctoPyTorch](https://github.com/npielawski/octopytorch) instead
+
 # 🔥 Better Tiramisu for PyTorch 🔥
 
 Implementation of the Tiramisu Neural network for PyTorch with new features such as:
